@@ -320,6 +320,22 @@ struct LLVMCodeGenerator
             opts.ExceptionModel = ::llvm::ExceptionHandling::None;
             opts.setFPDenormalMode (::llvm::DenormalMode::getPositiveZero());
 
+           #if defined(__aarch64__) || defined(__arm64__)
+            // On Apple Silicon (M1/M2/etc.), enable NEON and advanced SIMD features
+            // for better auto-vectorisation of audio DSP code. The M1 has 128-bit
+            // NEON units that can process 2x float64 or 4x float32 per cycle.
+            opts.UnsafeFPMath = true;      // Allow fast-math transformations for audio
+            opts.NoInfsFPMath = true;      // Audio signals are always finite
+            opts.NoNaNsFPMath = true;      // Audio signals should never be NaN
+            opts.NoTrappingFPMath = true;  // Don't trap on FP exceptions
+
+            // Add NEON and advanced SIMD features to the existing feature set
+            auto& features = machineBuilder->getFeatures();
+            features.AddFeature ("+neon");
+            features.AddFeature ("+fp-armv8");
+            features.AddFeature ("+fullfp16");
+           #endif
+
             machineBuilder->setCodeGenOptLevel (getCodeGenOptLevel (buildSettings.getOptimisationLevel()));
 
             if (auto tm = machineBuilder->createTargetMachine())
@@ -393,7 +409,18 @@ struct LLVMCodeGenerator
         ::llvm::FunctionAnalysisManager         functionAnalysisManager;
         ::llvm::CGSCCAnalysisManager            cGSCCAnalysisManager;
         ::llvm::ModuleAnalysisManager           moduleAnalysisManager;
+
         ::llvm::PipelineTuningOptions pto;
+
+       #if defined(__aarch64__) || defined(__arm64__)
+        // Enable aggressive loop vectorisation for NEON on Apple Silicon / AArch64.
+        // This helps auto-vectorise the inner loops in processor arrays, matrix
+        // operations, and batch math that are common in audio DSP workloads.
+        pto.LoopVectorization = true;
+        pto.SLPVectorization = true;          // Superword-level parallelism
+        pto.LoopUnrolling = true;
+        pto.LoopInterleaving = true;          // Interleave iterations across NEON lanes
+       #endif
 
 #if defined (__linux__) && defined (__arm__)
         // Do not use the full optimisation passes on arm32 due to compilation issues (for now)

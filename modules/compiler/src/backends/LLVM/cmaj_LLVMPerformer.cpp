@@ -97,6 +97,16 @@ struct LLJITHolder
             opts.setFPDenormalMode (::llvm::DenormalMode::getPositiveZero());
             opts.setFP32DenormalMode (::llvm::DenormalMode::getPositiveZero());
 
+           #if defined(__aarch64__) || defined(__arm64__)
+            // Enable fast-math and NEON for Apple Silicon audio DSP.
+            // These are safe for audio: signals are always finite, never NaN,
+            // and we want maximum throughput from the NEON SIMD units.
+            opts.UnsafeFPMath = true;
+            opts.NoInfsFPMath = true;
+            opts.NoNaNsFPMath = true;
+            opts.NoTrappingFPMath = true;
+           #endif
+
             machineBuilder->setCodeGenOptLevel (getCodeGenOptLevel (optimisationLevel));
 
             ::llvm::orc::LLJITBuilder builder;
