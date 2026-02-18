@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
+#include <thread>
 
 #ifdef __APPLE__
  // Opt in to the current CBLAS/LAPACK interface: without this, macOS 13.3+
