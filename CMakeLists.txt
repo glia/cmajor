@@ -103,3 +103,10 @@ if (BUILD_EXAMPLES)
     message ("Including example projects")
     add_subdirectory(examples/native_apps)
 endif()
+
+OPTION (BUILD_TESTS "Whether to build the tests" OFF)
+
+if (BUILD_TESTS)
+    message ("Including tests")
+    add_subdirectory(tests/apple_silicon_tests)
+endif()

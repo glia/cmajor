@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cmath>
 #include <algorithm>
+#include <thread>
 
 #ifdef __APPLE__
  #include <Accelerate/Accelerate.h>
