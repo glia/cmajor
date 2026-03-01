@@ -205,6 +205,8 @@ private:
     //==============================================================================
     void parseTopLevelDeclarations (AST::Namespace& parentNamespace, const NewModuleAddedCallback& moduleAdded)
     {
+        parseImportStatements (parentNamespace);
+
         auto comment = getCommentIfForward();
 
         while (! skipIf (LexerToken::eof))
@@ -445,15 +447,17 @@ private:
             if (! (isString || matches (LexerToken::identifier) || matchesAnyKeyword()))
                 throwError (Errors::expectedImportModule());
 
+            auto importContext = getContext();
             auto name = parseIdentifierOrKeywordOrString();
 
             if (! isString)
                 while (skipIf (LexerToken::operator_dot))
                     name += '.' + parseIdentifierOrKeywordOrString();
 
-            parent.imports.addString (getStringPool().get (name));
+            // Kept as a located object (rather than a bare string) so that a
+            // module that can't be resolved can be reported at the import itself
+            parent.imports.addChildObject (allocate<AST::ConstantString> (importContext, name));
             expectSemicolon();
-            throwError (Errors::unimplementedFeature ("import statements"));
         }
     }
 

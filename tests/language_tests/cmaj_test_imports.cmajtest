@@ -1,0 +1,182 @@
+// Tests for the Cmajor import system.
+// Validates import parsing, namespace access from imported files, and error handling.
+
+## global ("import_fixtures/MathUtils.cmajor", "import_fixtures/Oscillator.cmajor")
+
+//==============================================================================
+// Test 1: Access functions from an imported file's namespace
+//==============================================================================
+## testFunction()
+
+bool testSquare()
+{
+    return MathUtils::square (3.0) == 9.0;
+}
+
+bool testCube()
+{
+    return MathUtils::cube (2.0) == 8.0;
+}
+
+bool testLerp()
+{
+    let result = MathUtils::lerp (0.0, 10.0, 0.5);
+    return abs (result - 5.0) < 0.0001;
+}
+
+bool testLerpEdges()
+{
+    return MathUtils::lerp (1.0, 2.0, 0.0) == 1.0
+        && MathUtils::lerp (1.0, 2.0, 1.0) == 2.0;
+}
+
+bool testMathConstants()
+{
+    return MathUtils::pi > 3.14 && MathUtils::pi < 3.15;
+}
+
+bool testTwoPi()
+{
+    return abs (MathUtils::twoPi - 6.28318530717958) < 0.0001;
+}
+
+bool testVec2Struct()
+{
+    let v = MathUtils::makeVec2 (3.0, 4.0);
+    return v.x == 3.0 && v.y == 4.0;
+}
+
+//==============================================================================
+// Test 2: Access functions across multiple imported files
+//==============================================================================
+## testFunction()
+
+bool testSineWave()
+{
+    let phase = MathUtils::pi / 2.0;
+    let result = OscUtils::sineWave (phase);
+    return abs (result - 1.0) < 0.001;
+}
+
+bool testOscDefaultFreq()
+{
+    return OscUtils::defaultFreq == 440.0;
+}
+
+bool testCrossFileMath()
+{
+    let squared = MathUtils::square (OscUtils::defaultFreq);
+    return squared == 440.0 * 440.0;
+}
+
+//==============================================================================
+// Test 3: A file-path import that cannot be found is reported at the import
+//==============================================================================
+## expectError ("2:8: error: Cannot find imported file 'some_file.cmajor'")
+
+import "some_file.cmajor";
+
+processor TestImportSyntax [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 4: Multiple import statements are parsed; the first unresolvable one is reported
+//==============================================================================
+## expectError ("2:8: error: Cannot find imported file 'file_a.cmajor'")
+
+import "file_a.cmajor";
+import "file_b.cmajor";
+
+processor TestMultiImport [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 5: A dot-path import with no host resolver is an error, not a silent no-op
+//==============================================================================
+## expectError ("2:8: error: Cannot resolve import 'glia.DSPLib'")
+
+import glia.DSPLib;
+
+processor TestDotPath [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 6: Imports inside a namespace are parsed and resolved like top-level ones
+//==============================================================================
+## expectError ("4:12: error: Cannot find imported file 'some_lib.cmajor'")
+
+namespace MyPatch
+{
+    import "some_lib.cmajor";
+
+    processor Test [[main]]
+    {
+        output stream float64 out;
+        void main() { loop { out <- 0.0; advance(); } }
+    }
+}
+
+//==============================================================================
+// Test 7: Import after declarations is an error
+//==============================================================================
+## expectError ("6:5: error: Import statements can only be declared at the start of a namespace")
+
+namespace BadOrder
+{
+    let x = 1;
+
+    import "some_lib.cmajor";
+
+    processor Test [[main]]
+    {
+        output stream float64 out;
+        void main() { loop { out <- 0.0; advance(); } }
+    }
+}
+
+//==============================================================================
+// Test 8: A bare module name (no extension, no path separator) is a dot-path import
+//==============================================================================
+## expectError ("2:8: error: Cannot resolve import 'abcdefg'")
+
+import "abcdefg";
+
+//==============================================================================
+// Test 9: Multi-segment dot paths are reported with the full module name
+//==============================================================================
+## expectError ("2:8: error: Cannot resolve import 'a.b.c'")
+
+import a.b.c;
+
+//==============================================================================
+// Test 10: An unresolvable import inside a one-line namespace points at the import
+//==============================================================================
+## expectError ("2:22: error: Cannot resolve import 'xyz'")
+
+namespace N { import "xyz"; }
+
+//==============================================================================
+// Test 11: Imports in a later block of a merged namespace are still at the
+// start of that block, so they are parsed and resolved normally
+//==============================================================================
+## expectError ("8:12: error: Cannot resolve import 'something'")
+
+namespace a
+{
+}
+
+namespace a
+{
+    import something;
+
+    void f() {}
+}

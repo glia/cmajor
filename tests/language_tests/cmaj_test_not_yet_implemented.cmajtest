@@ -12,18 +12,6 @@
 //  license: see LICENSE.md for more details.
 
 
-## expectError ("4:2: error: Language feature not yet implemented: import statements!")
-
-import "abcdefg";
-
-## expectError ("4:2: error: Language feature not yet implemented: import statements!")
-
-import a.b.c;
-
-## expectError ("2:29: error: Language feature not yet implemented: import statements!")
-
-namespace N { import "xyz"; }
-
 ## expectError ("2:9: error: Language feature not yet implemented: Fixed point support!")
 
 void f (fixed v) {}
@@ -103,18 +91,6 @@ void f (int i)
 
 void foo() { console <- "bang"; }
 
-
-## expectError ("10:1: error: Language feature not yet implemented: import statements!")
-
-// Testing imports in merging namespaces
-namespace a
-{
-}
-
-namespace a
-{
-    import something;
-}
 
 ## expectError ("4:5: error: Language feature not yet implemented: switch statements!")
 

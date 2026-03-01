@@ -357,12 +357,49 @@ namespace cmaj::test
         std::string readSource (std::filesystem::path fileOrDirectory)
         {
             if (! is_directory (fileOrDirectory))
-                return choc::file::loadFileAsString (fileOrDirectory.string());
+                return stripMainAnnotation (choc::file::loadFileAsString (fileOrDirectory.string()));
 
             std::string result;
 
             for (auto& file : std::filesystem::recursive_directory_iterator (fileOrDirectory))
                 result += readSource (file);
+
+            return result;
+        }
+
+        static std::string stripMainAnnotation (std::string source)
+        {
+            std::string result;
+            result.reserve (source.size());
+
+            size_t i = 0;
+
+            while (i < source.size())
+            {
+                if (i + 1 < source.size() && source[i] == '[' && source[i + 1] == '[')
+                {
+                    auto end = source.find ("]]", i + 2);
+
+                    if (end != std::string::npos)
+                    {
+                        auto content = source.substr (i + 2, end - i - 2);
+                        auto trimmed = choc::text::trim (content);
+
+                        if (trimmed == "main")
+                        {
+                            i = end + 2;
+
+                            while (i < source.size() && (source[i] == ' ' || source[i] == '\t'))
+                                i++;
+
+                            continue;
+                        }
+                    }
+                }
+
+                result += source[i];
+                i++;
+            }
 
             return result;
         }

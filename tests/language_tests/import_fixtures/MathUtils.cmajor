@@ -1,0 +1,22 @@
+namespace MathUtils
+{
+    float64 square (float64 x)    { return x * x; }
+    float64 cube (float64 x)      { return x * x * x; }
+    float64 lerp (float64 a, float64 b, float64 t)  { return a + (b - a) * t; }
+
+    let pi = 3.14159265358979323846;
+    let twoPi = pi * 2.0;
+
+    struct Vec2
+    {
+        float64 x, y;
+    }
+
+    Vec2 makeVec2 (float64 x, float64 y)
+    {
+        Vec2 v;
+        v.x = x;
+        v.y = y;
+        return v;
+    }
+}

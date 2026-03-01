@@ -91,6 +91,8 @@ DECL_COMPILE_ERROR (graphCannotContainMainOrInitFunctions,  "The main() and init
 DECL_COMPILE_ERROR (onlyMemberFunctionsCanBeConst,          "Only struct member functions can be declared `const`")
 DECL_COMPILE_ERROR (namespaceCannotContainEndpoints,        "A namespace cannot contain endpoint declarations")
 DECL_COMPILE_ERROR (importsMustBeAtStart,                   "Import statements can only be declared at the start of a namespace")
+DECL_COMPILE_ERROR (cannotFindImportedFile,                 "Cannot find imported file '{0}'")
+DECL_COMPILE_ERROR (cannotResolveImport,                    "Cannot resolve import '{0}'")
 DECL_COMPILE_ERROR (noEventFunctionsAllowed,                "Event handlers can only be declared inside a processor or graph")
 DECL_COMPILE_ERROR (cannotMixEventFunctionsAndConnections,  "Graphs cannot contain both event handlers and connections for the same endpoint")
 DECL_COMPILE_ERROR (endpointDeclsMustBeFirst,               "Endpoint declarations must all appear at the start of the processor")

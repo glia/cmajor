@@ -1,0 +1,6 @@
+namespace OscUtils
+{
+    float64 sineWave (float64 phase)    { return sin (phase); }
+    float64 sawWave (float64 phase)     { return 2.0 * (phase / 3.14159265358979323846 - floor (phase / 3.14159265358979323846 + 0.5)); }
+    let defaultFreq = 440.0;
+}

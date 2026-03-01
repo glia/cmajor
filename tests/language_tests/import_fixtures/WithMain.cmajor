@@ -1,0 +1,24 @@
+// A standalone patch with [[main]] that should be importable by other patches.
+// The compiler should strip [[main]] automatically when this file is imported.
+
+namespace WithMainUtils
+{
+    float64 double_it (float64 x)  { return x * 2.0; }
+    float64 half_it (float64 x)    { return x * 0.5; }
+    let magicNumber = 42.0;
+}
+
+processor WithMainProcessor [[main]]
+{
+    input stream float64 audioIn;
+    output stream float64 audioOut;
+
+    void main()
+    {
+        loop
+        {
+            audioOut <- audioIn * 2.0;
+            advance();
+        }
+    }
+}
