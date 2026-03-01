@@ -184,6 +184,8 @@ private:
     //==============================================================================
     void parseTopLevelDeclarations (AST::Namespace& parentNamespace, const NewModuleAddedCallback& moduleAdded)
     {
+        parseImportStatements (parentNamespace);
+
         auto comment = getCommentIfForward();
 
         while (! skipIf (LexerToken::eof))
@@ -432,7 +434,6 @@ private:
 
             parent.imports.addString (getStringPool().get (name));
             expectSemicolon();
-            throwError (Errors::unimplementedFeature ("import statements"));
         }
     }
 

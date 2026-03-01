@@ -30,6 +30,9 @@ struct Program  : public choc::com::ObjectWithAtomicRefCount<cmaj::ProgramInterf
 
     void parse (const SourceFile&, bool isSystemModule);
 
+    using ImportFileResolver = std::function<std::vector<std::pair<std::string, std::string>> (const std::string& packagePath)>;
+    ImportFileResolver importFileResolver;
+
     choc::com::String* parse (const char* filename, const char* fileContent, size_t fileContentSize) override
     {
         return catchAllErrorsAsJSON (false, [&]
@@ -243,6 +246,12 @@ private:
     bool needsReparsing = false;
 
     void addStandardLibraryCode();
+    void resolveImports (const SourceFile& importingSource);
+    std::string resolveImportFilePath (const std::string& importerPath, const std::string& importPath);
+    std::string deriveNamespaceName (const std::string& importPath);
+    bool isAlreadyLoaded (const std::string& filePath);
+    void loadImportedFileFromDisk (const std::string& filePath, const std::string& namespaceName);
+    void loadImportedFile (const std::string& filePath, const std::string& content, const std::string& namespaceName);
 };
 
 static Program& getProgram (cmaj::ProgramInterface& p)

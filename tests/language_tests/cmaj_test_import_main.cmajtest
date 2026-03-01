@@ -1,0 +1,78 @@
+// Tests that files containing [[main]] can be imported or included without conflict.
+// The compiler strips [[main]] from imported files, and the test runner strips
+// [[main]] from ## global includes, so any .cmajor file is safely reusable.
+
+## global ("import_fixtures/WithMain.cmajor")
+
+//==============================================================================
+// Test 1: Access namespace from a file that has [[main]] -- no conflict
+//==============================================================================
+## testFunction()
+
+bool testDoubleIt()
+{
+    return WithMainUtils::double_it (5.0) == 10.0;
+}
+
+bool testHalfIt()
+{
+    return WithMainUtils::half_it (8.0) == 4.0;
+}
+
+bool testMagicNumber()
+{
+    return WithMainUtils::magicNumber == 42.0;
+}
+
+//==============================================================================
+// Test 2: The imported [[main]] processor is accessible as a plain processor
+//==============================================================================
+## testCompile()
+
+namespace uses_it
+{
+    graph Wrapper [[main]]
+    {
+        input stream float64 audioIn;
+        output stream float64 audioOut;
+
+        node lib = WithMainProcessor;
+
+        connection
+        {
+            audioIn -> lib.audioIn;
+            lib.audioOut -> audioOut;
+        }
+    }
+}
+
+//==============================================================================
+// Test 3: Parser accepts import syntax for a file with [[main]]
+//==============================================================================
+## testCompile()
+
+import "import_fixtures/WithMain.cmajor";
+
+processor TestImportWithMain [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 4: Import must be before other declarations (even with [[main]] files)
+//==============================================================================
+## expectError ("6:5: error: Import statements can only be declared at the start of a namespace")
+
+namespace BadImport
+{
+    let x = 1;
+
+    import "import_fixtures/WithMain.cmajor";
+
+    processor Test [[main]]
+    {
+        output stream float64 out;
+        void main() { loop { out <- 0.0; advance(); } }
+    }
+}

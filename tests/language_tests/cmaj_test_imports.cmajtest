@@ -1,0 +1,144 @@
+// Tests for the Cmajor import system.
+// Validates import parsing, namespace access from imported files, and error handling.
+
+## global ("import_fixtures/MathUtils.cmajor", "import_fixtures/Oscillator.cmajor")
+
+//==============================================================================
+// Test 1: Access functions from an imported file's namespace
+//==============================================================================
+## testFunction()
+
+bool testSquare()
+{
+    return MathUtils::square (3.0) == 9.0;
+}
+
+bool testCube()
+{
+    return MathUtils::cube (2.0) == 8.0;
+}
+
+bool testLerp()
+{
+    let result = MathUtils::lerp (0.0, 10.0, 0.5);
+    return abs (result - 5.0) < 0.0001;
+}
+
+bool testLerpEdges()
+{
+    return MathUtils::lerp (1.0, 2.0, 0.0) == 1.0
+        && MathUtils::lerp (1.0, 2.0, 1.0) == 2.0;
+}
+
+bool testMathConstants()
+{
+    return MathUtils::pi > 3.14 && MathUtils::pi < 3.15;
+}
+
+bool testTwoPi()
+{
+    return abs (MathUtils::twoPi - 6.28318530717958) < 0.0001;
+}
+
+bool testVec2Struct()
+{
+    let v = MathUtils::makeVec2 (3.0, 4.0);
+    return v.x == 3.0 && v.y == 4.0;
+}
+
+//==============================================================================
+// Test 2: Access functions across multiple imported files
+//==============================================================================
+## testFunction()
+
+bool testSineWave()
+{
+    let phase = MathUtils::pi / 2.0;
+    let result = OscUtils::sineWave (phase);
+    return abs (result - 1.0) < 0.001;
+}
+
+bool testOscDefaultFreq()
+{
+    return OscUtils::defaultFreq == 440.0;
+}
+
+bool testCrossFileMath()
+{
+    let squared = MathUtils::square (OscUtils::defaultFreq);
+    return squared == 440.0 * 440.0;
+}
+
+//==============================================================================
+// Test 3: Import syntax is accepted by the parser (string literal)
+//==============================================================================
+## testCompile()
+
+import "some_file.cmajor";
+
+processor TestImportSyntax [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 4: Multiple import statements are accepted by the parser
+//==============================================================================
+## testCompile()
+
+import "file_a.cmajor";
+import "file_b.cmajor";
+
+processor TestMultiImport [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 5: Dot-path import syntax is accepted
+//==============================================================================
+## testCompile()
+
+import glia.DSPLib;
+
+processor TestDotPath [[main]]
+{
+    output stream float64 out;
+    void main() { loop { out <- 0.0; advance(); } }
+}
+
+//==============================================================================
+// Test 6: Import inside namespace is accepted
+//==============================================================================
+## testCompile()
+
+namespace MyPatch
+{
+    import "some_lib.cmajor";
+
+    processor Test [[main]]
+    {
+        output stream float64 out;
+        void main() { loop { out <- 0.0; advance(); } }
+    }
+}
+
+//==============================================================================
+// Test 7: Import after declarations is an error
+//==============================================================================
+## expectError ("6:5: error: Import statements can only be declared at the start of a namespace")
+
+namespace BadOrder
+{
+    let x = 1;
+
+    import "some_lib.cmajor";
+
+    processor Test [[main]]
+    {
+        output stream float64 out;
+        void main() { loop { out <- 0.0; advance(); } }
+    }
+}
