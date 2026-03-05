@@ -13,7 +13,7 @@ Before this work, Cmajor had no module or import system. The `source` array in `
 - **No dependency declaration.** There is no way to express that patch A requires code from patch B. Dependencies are implicit and fragile.
 - **The `[[main]]` barrier.** A standalone patch marks its entry point with `[[main]]`. When that same processor is used as a component inside another patch, `[[main]]` must be manually removed.
 
-The `import` keyword is already reserved in Cmajor. This document defines its semantics. Phase 1 (parser + file-path resolution) is implemented; later phases are planned.
+The `import` keyword is already reserved in Cmajor. This document defines its semantics. Phase 1 (parser + file-path resolution) is implemented in the native compiler; Phase 1b (JavaScript-level import resolution for the web client's WASM compilation path) mirrors the same behaviour at the rendering layer. Later phases are planned.
 
 ---
 
@@ -179,14 +179,16 @@ Fine-grained imports for when you only need specific types or processors. Curren
 
 Import paths come in two forms:
 
-| Pattern | Meaning | Status |
-|---------|---------|--------|
-| `"./File.cmajor"` | Relative file in the same patch | Implemented |
-| `"../Shared/Utils.cmajor"` | Relative file in a sibling directory | Implemented |
-| `glia.Neuron` | Package from the registry or local dependencies | Parser + host callback implemented |
-| `std.filters` | Standard library module | Parser accepts; resolution not wired |
+| Pattern | Meaning | Native compiler | Web client |
+|---------|---------|-----------------|------------|
+| `"./File.cmajor"` | Relative file in the same patch | Implemented | Resolved by patch ID |
+| `"../Shared/Utils.cmajor"` | Relative file in a sibling directory | Implemented | Resolved by patch ID |
+| `glia.Neuron` | Package from the registry or local dependencies | Parser + host callback implemented | Resolved by patch ID |
+| `std.filters` | Standard library module | Parser accepts; resolution not wired | Not supported |
 
-File-path imports (string literals) are resolved by the compiler against the importing file's directory. Dot-path imports are resolved by the host via the `importFileResolver` callback.
+In the native compiler, file-path imports are resolved against the importing file's directory using `std::filesystem`. Dot-path imports are resolved by the host via the `importFileResolver` callback.
+
+In the web client, both forms are resolved by matching against known patch IDs in the `PatchStore` (e.g., `"../Neuron/Neuron.cmajor"` and `glia.Neuron` both resolve to the `glia/Neuron` patch). This happens at the JavaScript rendering layer before code is sent to the WASM compiler.
 
 ---
 
@@ -404,6 +406,45 @@ The following features from the design are not yet implemented:
 - **Circular import detection** -- no cycle detection; circular imports would cause infinite recursion in `resolveImports`
 - **Transitive dependency isolation** -- if A imports B and B imports C, C's symbols are visible to A (all code lands in the root namespace)
 - **Duplicate import diagnostics** -- `isAlreadyLoaded()` silently skips already-loaded files but does not warn
+
+### Phase 1b: Web Client Import Resolution (Implemented)
+
+The pre-built Cmajor WASM compiler (downloaded from cmajor.dev) does not include the Phase 1 import changes. The web client therefore resolves imports at the JavaScript level *before* sending code to the WASM compiler.
+
+**Implementation** (`web/src/components/CMajorRenderer/RenderPatches.ts`):
+
+The web client's code-generation pipeline has two stages: `renderPatches()` emits processor/graph definitions, then `renderGroup()` emits the session's `graph MainGraph [[ main ]]` with node declarations and connections. Import resolution happens in `renderPatches()`:
+
+1. **Scan** all patches in the session for `import` statements (both file-path and dot-path forms).
+2. **Classify** each import using the same heuristic as the native compiler: paths starting with `"`, `.`, or containing `/` or `.cmajor` are file-path imports; everything else is a dot-path import.
+3. **Resolve** file-path imports by extracting the directory/filename and matching against known patch IDs (e.g., `"../Neuron/Neuron.cmajor"` → `glia/Neuron`). Dot-path imports convert dots to `/` (e.g., `glia.Neuron` → `glia/Neuron`).
+4. **Inline** the resolved patch's source inside a `namespace <Name> { ... }` wrapper with `[[main]]` stripped — identical to the native compiler's `loadImportedFile()`.
+5. **Remove** the `import` statement from the importing file's source.
+6. **Suppress** standalone emission of imported patches to avoid duplicate top-level definitions. The graph template uses qualified names (`Neuron::Neuron`) for nodes whose patches are imported.
+
+**Dependency discovery** (`CMajorRenderer.ts`):
+
+The session graph may contain only the importing patch (e.g., Clock) without the imported patch (e.g., Neuron) as a standalone node. `findImportDependencyIds()` scans loaded patches for import statements and returns candidate patch IDs. `CMajorRenderer.render()` loads these dependency patches from the `PatchStore` before rendering.
+
+**Qualified node names** (`RenderGroup.ts`):
+
+When a patch is imported by another patch, its processor lives inside a namespace wrapper. The graph template must reference it with a qualified name. `getImportedPatchIds()` returns the set of imported patch IDs, and `renderGroup()` emits `Neuron::Neuron()` instead of `Neuron()` for those nodes.
+
+**Key files:**
+
+| File | Role |
+|------|------|
+| `RenderPatches.ts` | `resolveImports()`, `findImportDependencyIds()`, `getImportedPatchIds()`, `renderPatches()` |
+| `CMajorRenderer.ts` | Dependency discovery and loading; passes `importedPatchIds` to group rendering |
+| `RenderGroup.ts` | Uses `importedPatchIds` to qualify node type names in the graph template |
+| `MultiGroupRenderer.ts` | Passes `importedPatchIds` through to `renderGroup()` |
+| `RenderPatches.test.ts` | 12 tests covering file-path imports, dot-path imports, deduplication, dependency discovery, and missing-target handling |
+
+**Limitations vs. native compiler:**
+
+- Resolution is by patch ID convention (`glia/<Name>`), not by filesystem path. This works because all patches are loaded into the `PatchStore` via Yjs.
+- No `importFileResolver` callback — all source files are available in memory via the `PatchStore`.
+- No transitive import resolution — if an imported patch itself contains imports, those are not recursively resolved (the same limitation as the native compiler's current implementation).
 
 ### Phase 2: Host Integration + Alias Syntax (Next)
 
