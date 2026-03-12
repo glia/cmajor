@@ -21,6 +21,7 @@
 #include "../../include/cmaj_ErrorHandling.h"
 #include "../../../../include/cmajor/COM/cmaj_EngineFactoryInterface.h"
 #include <iostream>
+#include <cstring>
 #include "../AST/cmaj_AST.h"
 #include "../codegen/cmaj_GraphGenerator.h"
 #include "../transformations/cmaj_Transformations.h"
@@ -522,6 +523,23 @@ struct PerformerBase  : public choc::com::ObjectWithAtomicRefCount<cmaj::Perform
     uint32_t getEventBufferSize() override      { return eventBufferSize; }
     uint32_t getXRuns() override                { return xruns; }
     const char* getRuntimeError() override      { return {}; }
+
+    uint32_t getStateSize() override
+    {
+        return static_cast<uint32_t> (jit.stateMemory.size());
+    }
+
+    void getState (void* destBuffer, uint32_t bufferSize) override
+    {
+        auto size = std::min (static_cast<size_t> (bufferSize), jit.stateMemory.size());
+        std::memcpy (destBuffer, jit.stateMemory.data(), size);
+    }
+
+    void restoreState (const void* srcBuffer, uint32_t bufferSize) override
+    {
+        if (static_cast<size_t> (bufferSize) == jit.stateMemory.size())
+            std::memcpy (jit.stateMemory.data(), srcBuffer, bufferSize);
+    }
 
     const char* getStringForHandle (uint32_t handle, size_t& stringLength) override
     {

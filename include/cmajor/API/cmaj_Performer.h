@@ -19,6 +19,8 @@
 #pragma once
 
 #include <cassert>
+#include <vector>
+#include <cstdint>
 
 #include "cmaj_Program.h"
 #include "cmaj_Endpoints.h"
@@ -182,6 +184,22 @@ struct Performer
 
     /// If there has been a runtime error, this returns the message, or nullptr if there isn't one.
     const char* getRuntimeError() const;
+
+    //==============================================================================
+    /// Returns the size in bytes of this performer's internal state buffer.
+    /// Returns 0 if state snapshots are not supported by the backend.
+    uint32_t getStateSize() const;
+
+    /// Captures the performer's full internal state into a byte vector.
+    /// The returned data can be passed to restoreState() on another performer
+    /// that was created from the same linked program.
+    std::vector<uint8_t> getState() const;
+
+    /// Restores a previously captured state into this performer.
+    /// The data must have come from getState() on a performer built from the
+    /// same linked program. Returns true if the sizes matched and the state
+    /// was restored successfully.
+    bool restoreState (const std::vector<uint8_t>& state);
 
     //==============================================================================
     /// The underlying performer that this helper object is wrapping.
@@ -371,5 +389,26 @@ inline double Performer::getLatency() const             { return performer->getL
 inline uint32_t Performer::getEventBufferSize() const   { return performer->getEventBufferSize(); }
 inline const char* Performer::getRuntimeError() const   { return performer != nullptr ? performer->getRuntimeError() : nullptr; }
 
+inline uint32_t Performer::getStateSize() const
+{
+    return performer != nullptr ? performer->getStateSize() : 0;
+}
+
+inline std::vector<uint8_t> Performer::getState() const
+{
+    auto size = getStateSize();
+    if (size == 0) return {};
+    std::vector<uint8_t> buffer (size);
+    performer->getState (buffer.data(), size);
+    return buffer;
+}
+
+inline bool Performer::restoreState (const std::vector<uint8_t>& state)
+{
+    auto size = getStateSize();
+    if (size == 0 || state.size() != size) return false;
+    performer->restoreState (state.data(), static_cast<uint32_t> (state.size()));
+    return true;
+}
 
 } // namespace cmaj

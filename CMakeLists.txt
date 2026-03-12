@@ -107,6 +107,8 @@ endif()
 OPTION (BUILD_TESTS "Whether to build the tests" OFF)
 
 if (BUILD_TESTS)
+    enable_testing()
     message ("Including tests")
     add_subdirectory(tests/apple_silicon_tests)
+    add_subdirectory(tests/performer_state_tests)
 endif()

@@ -2602,34 +2602,86 @@ inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
     if (renderer == nullptr && newRenderer == nullptr)
         return;
 
-    if (currentPlaybackParams != newRenderer->configuredPlaybackParams)
+    if (newRenderer != nullptr && currentPlaybackParams != newRenderer->configuredPlaybackParams)
         return;
 
-    if (stopPlayback)
-        stopPlayback();
-
     fileChangeChecker.reset();
-    renderer.reset();
-    sendPatchChange();
 
-    if (newRenderer != nullptr)
+    if (renderer != nullptr && newRenderer != nullptr && newRenderer->isPlayable())
     {
-        renderer = std::move (newRenderer);
-        sendPatchChange();
+        // Hot swap: old renderer keeps processing audio while we prepare the
+        // new one, then we swap atomically under the process lock so there
+        // is zero gap in audio output.
+        clientEventQueue->prepare (newRenderer->sampleRate);
+        newRenderer->startPatchWorker();
 
-        if (isPlayable())
+        // Transfer current parameter values from old renderer to new renderer
+        for (auto& oldParam : renderer->getParameterList())
         {
-            clientEventQueue->prepare (renderer->sampleRate);
-            renderer->startPatchWorker();
-
-            if (startPlayback)
-                startPlayback();
-
-            if (handleInfiniteLoop)
-                renderer->startInfiniteLoopCheck (handleInfiniteLoop);
+            for (auto& newParam : newRenderer->getParameterList())
+            {
+                if (newParam->properties.endpointID == oldParam->properties.endpointID)
+                {
+                    newParam->setValue (oldParam->currentValue, false, -1, 0);
+                    break;
+                }
+            }
         }
 
+        {
+            // Acquire the old renderer's process lock so no audio callback
+            // is mid-flight, then swap the renderer pointer.
+            renderer->beginProcessBlock();
+            auto oldRenderer = std::move (renderer);
+            renderer = std::move (newRenderer);
+            oldRenderer->endProcessBlock();
+            // oldRenderer is destroyed here, outside the lock
+        }
+
+        sendPatchChange();
+
+        if (handleInfiniteLoop)
+            renderer->startInfiniteLoopCheck (handleInfiniteLoop);
+    }
+    else if (newRenderer != nullptr && newRenderer->errors.hasErrors() && renderer != nullptr && renderer->isPlayable())
+    {
+        // Compile error: keep old renderer running, just report the error.
         if (statusChanged)
+        {
+            Status s;
+            s.statusMessage = newRenderer->errors.toString();
+            s.messageList = newRenderer->errors;
+            statusChanged (s);
+        }
+    }
+    else
+    {
+        // Cold swap: no old renderer running (first load), or explicit teardown.
+        if (stopPlayback)
+            stopPlayback();
+
+        renderer.reset();
+        sendPatchChange();
+
+        if (newRenderer != nullptr)
+        {
+            renderer = std::move (newRenderer);
+            sendPatchChange();
+
+            if (isPlayable())
+            {
+                clientEventQueue->prepare (renderer->sampleRate);
+                renderer->startPatchWorker();
+
+                if (startPlayback)
+                    startPlayback();
+
+                if (handleInfiniteLoop)
+                    renderer->startInfiniteLoopCheck (handleInfiniteLoop);
+            }
+        }
+
+        if (statusChanged && renderer)
         {
             Status s;
 

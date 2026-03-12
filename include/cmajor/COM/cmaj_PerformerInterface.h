@@ -148,6 +148,23 @@ struct PerformerInterface   : public choc::com::Object
 
     /// If there has been a runtime error, this returns the message, or nullptr if there isn't one.
     virtual const char* getRuntimeError() = 0;
+
+    /// Returns the size in bytes of the performer's internal state.
+    /// This can be used to allocate a buffer for getState()/restoreState().
+    /// Returns 0 if state snapshots are not supported by this backend.
+    virtual uint32_t getStateSize() { return 0; }
+
+    /// Copies the performer's current internal state into the given buffer.
+    /// The buffer must be at least getStateSize() bytes. This captures all
+    /// processor variables, parameters, and internal state.
+    /// Only valid between performers created from the same linked program.
+    virtual void getState (void* /*destBuffer*/, uint32_t /*bufferSize*/) {}
+
+    /// Restores a previously captured state snapshot into this performer.
+    /// The buffer must have been captured from a performer created from the
+    /// same linked program (same Engine::link() output). Passing a snapshot
+    /// from a different program results in undefined behaviour.
+    virtual void restoreState (const void* /*srcBuffer*/, uint32_t /*bufferSize*/) {}
 };
 
 using PerformerPtr = choc::com::Ptr<PerformerInterface>;
