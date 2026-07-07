@@ -2616,9 +2616,9 @@ inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
         newRenderer->startPatchWorker();
 
         // Transfer current parameter values from old renderer to new renderer
-        for (auto& oldParam : renderer->getParameterList())
+        for (auto& oldParam : renderer->parameterList)
         {
-            for (auto& newParam : newRenderer->getParameterList())
+            for (auto& newParam : newRenderer->parameterList)
             {
                 if (newParam->properties.endpointID == oldParam->properties.endpointID)
                 {
