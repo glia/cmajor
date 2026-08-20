@@ -27,6 +27,10 @@
 #include <chrono>
 #include <condition_variable>
 
+// #region agent log (session 5399d4)
+#include "../../../../../Source/DebugLog.h"
+// #endregion
+
 namespace cmaj
 {
 
@@ -2029,6 +2033,19 @@ inline bool Patch::loadPatch (const LoadParams& params, bool synchronous)
     if (synchronous)
     {
         build->build ([] {});
+        // #region agent log
+        {
+            auto ts = std::chrono::duration_cast<std::chrono::milliseconds> (
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+            if (FILE* f = std::fopen ("/Users/user/Glia/.cursor/debug-a1d2ef.log", "a"))
+            {
+                std::fprintf (f, "{\"sessionId\":\"a1d2ef\",\"hypothesisId\":\"HG1\",\"location\":\"cmaj_Patch.h:loadPatch\","
+                    "\"message\":\"JIT build finished - calling setNewRenderer\",\"data\":{\"pid\":%d},\"timestamp\":%lld}\n",
+                    (int) getpid(), (long long) ts);
+                std::fclose (f);
+            }
+        }
+        // #endregion
         setNewRenderer (build->takeRenderer());
         return isPlayable();
     }
@@ -2609,6 +2626,19 @@ inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
 
     if (renderer != nullptr && newRenderer != nullptr && newRenderer->isPlayable())
     {
+        // #region agent log
+        {
+            auto ts = std::chrono::duration_cast<std::chrono::milliseconds> (
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+            if (FILE* f = std::fopen ("/Users/user/Glia/.cursor/debug-a1d2ef.log", "a"))
+            {
+                std::fprintf (f, "{\"sessionId\":\"a1d2ef\",\"hypothesisId\":\"HG2\",\"location\":\"cmaj_Patch.h:setNewRenderer\","
+                    "\"message\":\"hot swap - preparing new renderer\",\"data\":{\"pid\":%d},\"timestamp\":%lld}\n",
+                    (int) getpid(), (long long) ts);
+                std::fclose (f);
+            }
+        }
+        // #endregion
         // Hot swap: old renderer keeps processing audio while we prepare the
         // new one, then we swap atomically under the process lock so there
         // is zero gap in audio output.
@@ -2629,15 +2659,54 @@ inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
         }
 
         {
+            // #region agent log
+            {
+                auto ts = std::chrono::duration_cast<std::chrono::milliseconds> (
+                              std::chrono::system_clock::now().time_since_epoch()).count();
+                if (FILE* f = std::fopen ("/Users/user/Glia/.cursor/debug-a1d2ef.log", "a"))
+                {
+                    std::fprintf (f, "{\"sessionId\":\"a1d2ef\",\"hypothesisId\":\"HG2\",\"location\":\"cmaj_Patch.h:setNewRenderer\","
+                        "\"message\":\"acquiring old renderer process lock (beginProcessBlock)\",\"data\":{\"pid\":%d},\"timestamp\":%lld}\n",
+                        (int) getpid(), (long long) ts);
+                    std::fclose (f);
+                }
+            }
+            // #endregion
             // Acquire the old renderer's process lock so no audio callback
             // is mid-flight, then swap the renderer pointer.
             renderer->beginProcessBlock();
             auto oldRenderer = std::move (renderer);
             renderer = std::move (newRenderer);
             oldRenderer->endProcessBlock();
+            // #region agent log
+            {
+                auto ts2 = std::chrono::duration_cast<std::chrono::milliseconds> (
+                              std::chrono::system_clock::now().time_since_epoch()).count();
+                if (FILE* f2 = std::fopen ("/Users/user/Glia/.cursor/debug-d37669.log", "a"))
+                {
+                    std::fprintf (f2, "{\"sessionId\":\"d37669\",\"hypothesisId\":\"H2\",\"location\":\"cmaj_Patch.h:setNewRenderer\","
+                        "\"message\":\"hot swap done - old renderer refcount before destruction\",\"data\":{\"pid\":%d,\"patch\":\"%p\",\"oldRendererUseCount\":%ld},\"timestamp\":%lld}\n",
+                        (int) getpid(), (void*) this, (long) oldRenderer.use_count(), (long long) ts2);
+                    std::fclose (f2);
+                }
+            }
+            // #endregion
             // oldRenderer is destroyed here, outside the lock
         }
 
+        // #region agent log
+        {
+            auto ts = std::chrono::duration_cast<std::chrono::milliseconds> (
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+            if (FILE* f = std::fopen ("/Users/user/Glia/.cursor/debug-a1d2ef.log", "a"))
+            {
+                std::fprintf (f, "{\"sessionId\":\"a1d2ef\",\"hypothesisId\":\"HG2\",\"location\":\"cmaj_Patch.h:setNewRenderer\","
+                    "\"message\":\"renderer swapped (hot swap complete)\",\"data\":{\"pid\":%d},\"timestamp\":%lld}\n",
+                    (int) getpid(), (long long) ts);
+                std::fclose (f);
+            }
+        }
+        // #endregion
         sendPatchChange();
 
         if (handleInfiniteLoop)
