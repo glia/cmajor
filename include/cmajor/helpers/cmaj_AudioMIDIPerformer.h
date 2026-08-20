@@ -49,6 +49,13 @@ struct AudioMIDIPerformer
     struct AudioDataListener
     {
         virtual ~AudioDataListener() = default;
+
+        /// Return false when nothing is currently attached to this listener:
+        /// listener-only endpoints (ones with no host output channels) then
+        /// skip their per-block copyOutputFrames() + process() entirely, so an
+        /// unwatched monitor stream costs nothing on the audio thread.
+        virtual bool wantsProcessing() const     { return true; }
+
         virtual void process (const choc::buffer::InterleavedView<float>&) = 0;
         virtual void process (const choc::buffer::InterleavedView<double>&) = 0;
     };
@@ -344,6 +351,9 @@ void AudioMIDIPerformer::Builder::addOutputCopyFunction (EndpointHandle endpoint
             result->postRenderAddFunctions.push_back ([amp = result.get(), endpointHandle, scratch, listener]
                                                       (const choc::audio::AudioMIDIBlockDispatcher::Block& block)
             {
+                if (! listener->wantsProcessing())
+                    return;
+
                 auto destSize = block.audioOutput.getSize();
                 auto source = scratch.getStart (destSize.numFrames);
 
@@ -354,6 +364,9 @@ void AudioMIDIPerformer::Builder::addOutputCopyFunction (EndpointHandle endpoint
             result->postRenderReplaceFunctions.push_back ([amp = result.get(), endpointHandle, scratch, listener]
                                                           (const choc::audio::AudioMIDIBlockDispatcher::Block& block)
             {
+                if (! listener->wantsProcessing())
+                    return;
+
                 auto destSize = block.audioOutput.getSize();
                 auto source = scratch.getStart (destSize.numFrames);
 

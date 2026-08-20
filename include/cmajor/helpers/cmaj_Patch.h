@@ -1134,6 +1134,16 @@ struct Patch::PatchRenderer  : public std::enable_shared_from_this<PatchRenderer
     {
         DataListener (ClientEventQueue& c) : queue (c) {}
 
+        // A listener with no custom source and no subscribed monitors has no
+        // observable effect, so listener-only endpoints (e.g. hoisted viz
+        // streams with no UI attached) skip their per-block drain entirely.
+        // audioMonitors is only mutated under the renderer's processLock,
+        // which the audio thread holds while running these callbacks.
+        bool wantsProcessing() const override
+        {
+            return customSource != nullptr || ! audioMonitors.empty();
+        }
+
         void process (const choc::buffer::InterleavedView<float>& block) override
         {
             if (customSource != nullptr)
