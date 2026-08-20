@@ -19,6 +19,11 @@
 #pragma once
 
 #include <memory>
+// #region agent log (session a1d2ef instrumentation includes)
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+// #endregion
 #include "cmaj_Patch.h"
 #include "../../choc/choc/gui/choc_WebView.h"
 #include "../../choc/choc/network/choc_MIMETypes.h"
@@ -112,6 +117,29 @@ inline PatchWebView::~PatchWebView() = default;
 
 inline void PatchWebView::sendMessage (const choc::value::ValueView& msg)
 {
+    // #region agent log
+    {
+        static std::atomic<uint64_t> dbgCount { 0 };
+        auto n = ++dbgCount;
+        if (n <= 5 || n % 250 == 0)
+        {
+            std::string type;
+            if (msg.isObject() && msg.hasObjectMember ("type") && msg["type"].isString())
+                type = std::string (msg["type"].getString());
+            auto ts = std::chrono::duration_cast<std::chrono::milliseconds> (
+                          std::chrono::system_clock::now().time_since_epoch()).count();
+            if (FILE* f = std::fopen ("/Users/user/Glia/.cursor/debug-a1d2ef.log", "a"))
+            {
+                std::fprintf (f,
+                    "{\"sessionId\":\"a1d2ef\",\"hypothesisId\":\"H5\",\"location\":\"cmaj_PatchWebView.h:sendMessage\","
+                    "\"message\":\"patchUIHolder webview evaluateJavascript (never-windowed WKWebView)\","
+                    "\"data\":{\"count\":%llu,\"type\":\"%s\"},\"timestamp\":%lld}\n",
+                    static_cast<unsigned long long> (n), type.c_str(), static_cast<long long> (ts));
+                std::fclose (f);
+            }
+        }
+    }
+    // #endregion
     getWebView().evaluateJavascript ("window.cmaj_deliverMessageFromServer?.(" + choc::json::toString (msg, true) + ");");
 }
 
