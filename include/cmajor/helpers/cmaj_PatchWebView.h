@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include <memory>
 #include "cmaj_Patch.h"
 #include "../../choc/choc/gui/choc_WebView.h"
@@ -36,6 +38,11 @@ struct PatchWebView  : public PatchView
     void sendMessage (const choc::value::ValueView&) override;
     void reload();
 
+    /// The number of messages that have been pushed to the webview with sendMessage()
+    /// since this view was created. Lets a host tell "the patch is sending" apart
+    /// from "the page is receiving" when a view appears dead.
+    uint64_t getNumMessagesSent() const         { return numMessagesSent.load (std::memory_order_relaxed); }
+
     choc::ui::WebView& getWebView();
 
     void setStatusMessage (const std::string& newMessage);
@@ -51,6 +58,7 @@ struct PatchWebView  : public PatchView
 
 private:
     std::unique_ptr<choc::ui::WebView> webview;
+    std::atomic<uint64_t> numMessagesSent { 0 };
     std::optional<choc::ui::WebView::Options::Resource> onRequest (const std::string&);
     void createBindings();
 };
@@ -112,6 +120,14 @@ inline PatchWebView::~PatchWebView() = default;
 
 inline void PatchWebView::sendMessage (const choc::value::ValueView& msg)
 {
+    auto count = numMessagesSent.fetch_add (1, std::memory_order_relaxed) + 1;
+
+    // Sampled, so a host that has set a debug handler can see message flow
+    // without being flooded: the first few messages, then one in every 250.
+    if (patch.debugMessageHandler && (count <= 5 || count % 250 == 0))
+        patch.logDebugMessage ("PatchWebView: sent message #" + std::to_string (count)
+                                 + (msg.isObject() && msg.hasObjectMember ("type") ? " type=" + msg["type"].toString() : std::string()));
+
     getWebView().evaluateJavascript ("window.cmaj_deliverMessageFromServer?.(" + choc::json::toString (msg, true) + ");");
 }
 

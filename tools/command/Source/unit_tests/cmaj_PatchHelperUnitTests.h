@@ -775,6 +775,54 @@ static void runEndpointDrainTests (choc::test::TestProgress& progress)
     }
 }
 
+//==============================================================================
+/// Tests for Patch::debugMessageHandler, the opt-in hook that reports build and
+/// renderer-swap milestones to the host.
+static void runDebugHookTests (choc::test::TestProgress& progress)
+{
+    CHOC_CATEGORY (PatchUtilities);
+
+    {
+        CHOC_TEST (DebugMessageHandlerReportsBuildAndSwapMilestones)
+
+        Patch patch;
+        initTestPatch (patch);
+
+        std::vector<std::string> messages;
+        patch.debugMessageHandler = [&] (std::string_view m) { messages.emplace_back (m); };
+
+        const auto mentions = [&] (std::string_view needle)
+        {
+            return std::any_of (messages.begin(), messages.end(),
+                                [&] (const std::string& m) { return m.find (needle) != std::string::npos; });
+        };
+
+        if (! loadTestPatch (patch, createBasicManifest(), gainPatchSource, 4, 4, 1, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        CHOC_EXPECT_FALSE (messages.empty());
+        CHOC_EXPECT_TRUE (mentions ("setNewRenderer"));
+
+        messages.clear();
+        patch.rebuild (true);
+        CHOC_EXPECT_TRUE (mentions ("setNewRenderer"));
+
+        messages.clear();
+        patch.unload();
+        CHOC_EXPECT_TRUE (mentions ("unload"));
+
+        // with the handler cleared, nothing is reported and nothing breaks
+        patch.debugMessageHandler = {};
+        messages.clear();
+        CHOC_EXPECT_TRUE (loadTestPatch (patch, createBasicManifest(), gainPatchSource, 4, 4, 1, 1));
+        patch.rebuild (true);
+        CHOC_EXPECT_TRUE (messages.empty());
+    }
+}
+
 static void runPatchStateTests (choc::test::TestProgress& progress)
 {
     CHOC_CATEGORY (PatchUtilities);
@@ -3336,6 +3384,7 @@ static bool runUnitTests (choc::test::TestProgress& progress)
     runPatchProcessingTests (progress);
     runPatchClientMessageTests (progress);
     runPatchAsyncTests (progress);
+    runDebugHookTests (progress);
     runEndpointDrainTests (progress);
     runRealtimeOutputEventTapTests (progress);
     runHotSwapTests (progress);
