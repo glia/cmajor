@@ -222,6 +222,15 @@ struct Patch
     /// This must be supplied by the client before processing any data
     HandleOutputEventFn handleOutputEvent;
 
+    using RealtimeOutputEventFn = AudioMIDIPerformer::RealtimeOutputEventFn;
+
+    /// Routes one event output endpoint's events to a realtime (audio-thread) handler
+    /// instead of handleOutputEvent. The handler is remembered by endpoint ID and applied
+    /// to every renderer before it goes live, so it survives recompiles; it takes effect
+    /// from the next renderer, not on one that is already playing. Pass an empty function
+    /// to remove a handler. See AudioMIDIPerformer::setRealtimeOutputEventHandler.
+    void setRealtimeOutputEventHandler (const EndpointID&, RealtimeOutputEventFn);
+
     // These are optional callbacks that the client can supply to be called when
     // various events occur:
     std::function<void()> stopPlayback,
@@ -345,6 +354,7 @@ private:
     std::unique_ptr<PatchFileChangeChecker> fileChangeChecker;
     std::vector<PatchView*> activeViews;
     std::unordered_map<std::string, choc::value::Value> storedState;
+    std::unordered_map<std::string, RealtimeOutputEventFn> realtimeOutputEventHandlers;
 
     struct ClientEventQueue;
     std::unique_ptr<ClientEventQueue> clientEventQueue;
@@ -361,6 +371,7 @@ private:
 
     void sendPatchChange();
     void setNewRenderer (std::shared_ptr<PatchRenderer>);
+    void applyRealtimeOutputEventHandlers (PatchRenderer&);
     void sendOutputEventToViews (uint64_t frame, std::string_view endpointID, const choc::value::ValueView&);
     PatchView* findViewForID (uint16_t) const;
     void startCheckingForChanges();
@@ -2611,10 +2622,30 @@ inline void Patch::sendPatchChange()
         patchChanged();
 }
 
+inline void Patch::setRealtimeOutputEventHandler (const EndpointID& endpointID, RealtimeOutputEventFn fn)
+{
+    if (fn)
+        realtimeOutputEventHandlers[endpointID.toString()] = std::move (fn);
+    else
+        realtimeOutputEventHandlers.erase (endpointID.toString());
+}
+
+inline void Patch::applyRealtimeOutputEventHandlers (PatchRenderer& r)
+{
+    if (auto p = r.getPerformerPointer())
+        for (auto& handler : realtimeOutputEventHandlers)
+            p->setRealtimeOutputEventHandler (EndpointID::create (handler.first), handler.second);
+}
+
 inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
 {
     if (renderer == nullptr && newRenderer == nullptr)
         return;
+
+    // The new renderer isn't processing audio yet, so this is the one safe
+    // moment to install realtime output handlers on its performer.
+    if (newRenderer != nullptr)
+        applyRealtimeOutputEventHandlers (*newRenderer);
 
     if (currentPlaybackParams != newRenderer->configuredPlaybackParams)
         return;

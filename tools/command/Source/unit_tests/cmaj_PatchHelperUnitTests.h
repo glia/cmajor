@@ -297,6 +297,222 @@ static constexpr const char* passThroughPatchSource = R"(
 )";
 
 //==============================================================================
+//==============================================================================
+/// A processor which emits an int32 event on every odd frame, and one event on
+/// a second endpoint, so that tests can check which path each endpoint takes.
+static constexpr const char* eventEmitterPatchSource = R"(
+    processor Test [[ main ]]
+    {
+        output stream float32 out;
+        output event int32 tick;
+        output event int32 other;
+
+        int32 frame = 0;
+
+        void main()
+        {
+            loop
+            {
+                if ((frame % 2) == 1)
+                    tick <- frame;
+
+                if (frame == 2)
+                    other <- 99;
+
+                out <- 0.0f;
+                ++frame;
+                advance();
+            }
+        }
+    }
+)";
+
+/// Tests for Patch::setRealtimeOutputEventHandler, which delivers one event
+/// output endpoint's events synchronously on the processing thread instead of
+/// queueing them for handleOutputEvent on the message thread.
+static void runRealtimeOutputEventTapTests (choc::test::TestProgress& progress)
+{
+    CHOC_CATEGORY (PatchUtilities);
+
+    struct TappedEvent { uint32_t frameOffset; int32_t value; };
+
+    const auto readInt32 = [] (const void* data, uint32_t size) -> int32_t
+    {
+        int32_t v = 0;
+        if (size == sizeof (v)) std::memcpy (std::addressof (v), data, size);
+        return v;
+    };
+
+    {
+        CHOC_TEST (RealtimeHandlerReceivesEventsOnTheProcessingThread)
+
+        Patch patch;
+        initTestPatch (patch);
+
+        std::vector<TappedEvent> tapped;
+        std::thread::id tapThread;
+        std::vector<std::string> queuedEndpoints;
+
+        patch.handleOutputEvent = [&] (uint64_t, std::string_view endpointID, const choc::value::ValueView&)
+        {
+            queuedEndpoints.push_back (std::string (endpointID));
+        };
+
+        patch.setRealtimeOutputEventHandler (EndpointID::create (std::string_view ("tick")),
+                                             [&] (uint32_t frameOffset, const void* data, uint32_t size)
+                                             {
+                                                 tapped.push_back ({ frameOffset, readInt32 (data, size) });
+                                                 tapThread = std::this_thread::get_id();
+                                             });
+
+        if (! loadTestPatch (patch, createBasicManifest(), eventEmitterPatchSource, 4, 4, 0, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        std::array<float, 4> buffer {};
+        std::array<float*, 1> buffers { { buffer.data() } };
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+
+        // frames 1 and 3 of the block, delivered before process() returned, on this thread
+        if (tapped.size() != 2)
+        {
+            CHOC_FAIL ("Expected two tapped events, got " + std::to_string (tapped.size()));
+            return;
+        }
+
+        CHOC_EXPECT_EQ (tapped[0].frameOffset, 1u);
+        CHOC_EXPECT_EQ (tapped[0].value, 1);
+        CHOC_EXPECT_EQ (tapped[1].frameOffset, 3u);
+        CHOC_EXPECT_EQ (tapped[1].value, 3);
+        CHOC_EXPECT_TRUE (tapThread == std::this_thread::get_id());
+
+        // the other endpoint still goes through the queue to handleOutputEvent...
+        CHOC_EXPECT_TRUE (runMessageLoopUntil ([&] { return ! queuedEndpoints.empty(); }));
+        runMessageLoopUntil ([] { return false; }, 100);
+        CHOC_EXPECT_EQ (queuedEndpoints.size(), 1u);
+        CHOC_EXPECT_EQ (queuedEndpoints.front(), "other");
+
+        // ...and the next block's offsets are block-relative again
+        tapped.clear();
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_EQ (tapped.size(), 2u);
+
+        if (tapped.size() == 2)
+        {
+            CHOC_EXPECT_EQ (tapped[0].frameOffset, 1u);
+            CHOC_EXPECT_EQ (tapped[0].value, 5);
+            CHOC_EXPECT_EQ (tapped[1].frameOffset, 3u);
+            CHOC_EXPECT_EQ (tapped[1].value, 7);
+        }
+    }
+
+    {
+        CHOC_TEST (RealtimeHandlerOffsetsSpanMIDISubBlocks)
+
+        Patch patch;
+        initTestPatch (patch);
+        std::vector<TappedEvent> tapped;
+
+        patch.setRealtimeOutputEventHandler (EndpointID::create (std::string_view ("tick")),
+                                             [&] (uint32_t frameOffset, const void* data, uint32_t size)
+                                             {
+                                                 tapped.push_back ({ frameOffset, readInt32 (data, size) });
+                                             });
+
+        if (! loadTestPatch (patch, createBasicManifest(), eventEmitterPatchSource, 4, 4, 0, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        // a MIDI message at frame 2 makes the performer split the block into [0,2) and [2,4);
+        // the handler must still see offsets relative to the host block, i.e. 1 and 3
+        const uint8_t noteOn[] = { 0x90, 60, 100 };
+        patch.addMIDIMessage (2, noteOn, 3);
+
+        std::array<float, 4> buffer {};
+        std::array<float*, 1> buffers { { buffer.data() } };
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+
+        CHOC_EXPECT_EQ (tapped.size(), 2u);
+
+        if (tapped.size() == 2)
+        {
+            CHOC_EXPECT_EQ (tapped[0].frameOffset, 1u);
+            CHOC_EXPECT_EQ (tapped[1].frameOffset, 3u);
+        }
+    }
+
+    {
+        CHOC_TEST (RealtimeHandlerSurvivesRebuildAndCanBeRemoved)
+
+        Patch patch;
+        initTestPatch (patch);
+        std::vector<TappedEvent> tapped;
+        std::vector<std::string> queuedEndpoints;
+
+        patch.handleOutputEvent = [&] (uint64_t, std::string_view endpointID, const choc::value::ValueView&)
+        {
+            queuedEndpoints.push_back (std::string (endpointID));
+        };
+
+        patch.setRealtimeOutputEventHandler (EndpointID::create (std::string_view ("tick")),
+                                             [&] (uint32_t frameOffset, const void* data, uint32_t size)
+                                             {
+                                                 tapped.push_back ({ frameOffset, readInt32 (data, size) });
+                                             });
+
+        if (! loadTestPatch (patch, createBasicManifest(), eventEmitterPatchSource, 4, 4, 0, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        std::array<float, 4> buffer {};
+        std::array<float*, 1> buffers { { buffer.data() } };
+
+        // the handler is remembered by endpoint ID and re-applied to the renderer built by a recompile
+        patch.rebuild (true);
+        CHOC_EXPECT_TRUE (patch.isPlayable());
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_EQ (tapped.size(), 2u);
+
+        // removing it takes effect from the next renderer: events go back to the queue
+        patch.setRealtimeOutputEventHandler (EndpointID::create (std::string_view ("tick")), {});
+        patch.rebuild (true);
+        tapped.clear();
+        queuedEndpoints.clear();
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_EQ (tapped.size(), 0u);
+        CHOC_EXPECT_TRUE (runMessageLoopUntil ([&] { return std::count (queuedEndpoints.begin(), queuedEndpoints.end(), "tick") == 2; }));
+    }
+
+    {
+        CHOC_TEST (RealtimeHandlerForUnknownEndpointIsHarmless)
+
+        Patch patch;
+        initTestPatch (patch);
+        bool called = false;
+
+        patch.setRealtimeOutputEventHandler (EndpointID::create (std::string_view ("noSuchEndpoint")),
+                                             [&] (uint32_t, const void*, uint32_t) { called = true; });
+
+        if (! loadTestPatch (patch, createBasicManifest(), eventEmitterPatchSource, 4, 4, 0, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        std::array<float, 4> buffer {};
+        std::array<float*, 1> buffers { { buffer.data() } };
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_FALSE (called);
+        CHOC_EXPECT_TRUE (patch.isPlayable());
+    }
+}
+
 static void runPatchStateTests (choc::test::TestProgress& progress)
 {
     CHOC_CATEGORY (PatchUtilities);
@@ -2858,6 +3074,7 @@ static bool runUnitTests (choc::test::TestProgress& progress)
     runPatchProcessingTests (progress);
     runPatchClientMessageTests (progress);
     runPatchAsyncTests (progress);
+    runRealtimeOutputEventTapTests (progress);
 
     return progress.numFails == 0;
 }
