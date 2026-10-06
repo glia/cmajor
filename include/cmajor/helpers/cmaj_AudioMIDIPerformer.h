@@ -134,6 +134,24 @@ struct AudioMIDIPerformer
     /// It's safe to call this from any thread.
     void handlePendingOutputEvents (OutputEventHandlerFn&&);
 
+    //==============================================================================
+    /// A function that receives an event output endpoint's events synchronously on the
+    /// realtime audio thread, instead of them being queued for handlePendingOutputEvents().
+    /// frameOffset is relative to the start of the host's block (sub-block splits made by
+    /// processWithTimeStampedMIDI are accounted for), and the data
+    /// is the raw value in the endpoint's native layout (e.g. 4 bytes for an int32 event).
+    /// The function must be realtime-safe: no locks, allocation or I/O.
+    using RealtimeOutputEventFn = std::function<void(uint32_t frameOffset, const void* valueData, uint32_t valueDataSize)>;
+
+    /// Routes an event output endpoint's events to a realtime handler, bypassing the
+    /// output queue (and so the message thread) for that endpoint only. Pass an empty
+    /// function to restore the default queued behaviour.
+    /// Not thread-safe with respect to process(): call it before processing begins,
+    /// which is what Patch::setRealtimeOutputEventHandler guarantees by applying it to
+    /// each new renderer before the renderer goes live.
+    /// Returns false if there's no event output endpoint with this ID.
+    bool setRealtimeOutputEventHandler (const cmaj::EndpointID&, RealtimeOutputEventFn);
+
     /// Detects infinite loops inside the current process callback by checking whether the process
     /// thread has been inside the same callback for more than the given amount of time. For this to
     /// work, it needs to be called regularly (at least a few times per second) by another thread.
@@ -151,6 +169,7 @@ private:
                                                                                           postRenderAddFunctions;
     std::vector<cmaj::EndpointHandle> midiInputEndpoints, midiOutputEndpoints;
     std::vector<std::pair<cmaj::EndpointHandle, std::string>> eventOutputHandles;
+    std::vector<std::pair<cmaj::EndpointHandle, RealtimeOutputEventFn>> realtimeOutputEventHandlers;
     std::unordered_map<std::string, EndpointHandle> inputEndpointHandles;
     choc::fifo::VariableSizeFIFO inputQueue, outputQueue;
     OutputEventsReadyFn outputEventsReadyHandler;
@@ -160,6 +179,10 @@ private:
     std::vector<uint8_t> audioOutputScratchSpace;
 
     uint64_t numFramesProcessed = 0;
+    /// Start of the sub-block currently being processed, relative to the host block
+    /// (non-zero only inside processWithTimeStampedMIDI). Lets realtime output
+    /// handlers report block-relative frame offsets.
+    uint32_t currentChunkStartInBlock = 0;
     static constexpr uint32_t maxFramesPerBlock = 512;
     uint32_t currentMaxBlockSize = 0;
 
@@ -174,6 +197,7 @@ private:
     void allocateScratch();
     void dispatchMIDIOutputEvents (const choc::audio::AudioMIDIBlockDispatcher::Block&);
     void moveOutputEventsToQueue();
+    const RealtimeOutputEventFn* findRealtimeOutputEventHandler (cmaj::EndpointHandle) const;
 };
 
 
@@ -858,6 +882,8 @@ inline bool AudioMIDIPerformer::processWithTimeStampedMIDI (const choc::buffer::
             ++endOfMIDI;
         }
 
+        currentChunkStartInBlock = static_cast<uint32_t> (chunkToDo.start);
+
         if (! process (choc::audio::AudioMIDIBlockDispatcher::Block
                        {
                            audioInput.getFrameRange (chunkToDo),
@@ -869,12 +895,16 @@ inline bool AudioMIDIPerformer::processWithTimeStampedMIDI (const choc::buffer::
                                sendMidiOut (chunkToDo.start + frame, m);
                            }
                        }, replaceOutput))
+        {
+            currentChunkStartInBlock = 0;
             return false;
+        }
 
         remainingChunk.start = chunkToDo.end;
         midiStartIndex = endOfMIDI;
     }
 
+    currentChunkStartInBlock = 0;
     return false;
 }
 
@@ -932,41 +962,97 @@ inline void AudioMIDIPerformer::handlePendingOutputEvents (OutputEventHandlerFn&
     });
 }
 
-inline void AudioMIDIPerformer::moveOutputEventsToQueue()
+inline bool AudioMIDIPerformer::setRealtimeOutputEventHandler (const cmaj::EndpointID& endpointID, RealtimeOutputEventFn fn)
 {
-    if (outputEventsReadyHandler)
+    for (const auto& handle : eventOutputHandles)
     {
-        bool anyEvents = false;
+        if (handle.second != endpointID.toString())
+            continue;
 
-        for (const auto& handle : eventOutputHandles)
+        for (auto it = realtimeOutputEventHandlers.begin(); it != realtimeOutputEventHandlers.end(); ++it)
         {
-            performer.iterateOutputEvents (handle.first,
-                                           [this, &anyEvents] (EndpointHandle h, uint32_t dataTypeIndex, uint32_t frameOffset,
-                                                               const void* valueData, uint32_t valueDataSize) -> bool
+            if (it->first == handle.first)
             {
-                auto frame = numFramesProcessed + frameOffset;
-                auto totalSize = static_cast<uint32_t> (sizeof (h) + sizeof (dataTypeIndex) + sizeof (frame) + valueDataSize);
+                if (fn)
+                    it->second = std::move (fn);
+                else
+                    realtimeOutputEventHandlers.erase (it);
 
-                bool ok = outputQueue.push (totalSize, [=] (void* dest)
-                {
-                    auto d = static_cast<uint8_t*> (dest);
-                    choc::memory::writeNativeEndian (d, h);
-                    d += sizeof (h);
-                    choc::memory::writeNativeEndian (d, dataTypeIndex);
-                    d += sizeof (dataTypeIndex);
-                    choc::memory::writeNativeEndian (d, frame);
-                    d += sizeof (frame);
-                    std::memcpy (d, valueData, valueDataSize);
-                });
-
-                anyEvents = true;
-                return ok;
-            });
+                return true;
+            }
         }
 
-        if (anyEvents)
-            outputEventsReadyHandler();
+        if (fn)
+            realtimeOutputEventHandlers.emplace_back (handle.first, std::move (fn));
+
+        return true;
     }
+
+    return false;
+}
+
+inline const AudioMIDIPerformer::RealtimeOutputEventFn* AudioMIDIPerformer::findRealtimeOutputEventHandler (cmaj::EndpointHandle handle) const
+{
+    for (const auto& h : realtimeOutputEventHandlers)
+        if (h.first == handle)
+            return std::addressof (h.second);
+
+    return nullptr;
+}
+
+inline void AudioMIDIPerformer::moveOutputEventsToQueue()
+{
+    bool anyEvents = false;
+
+    for (const auto& handle : eventOutputHandles)
+    {
+        // Endpoints with a realtime handler are delivered right here, on the
+        // audio thread, and never touch the queue or the message thread.
+        if (auto realtimeHandler = findRealtimeOutputEventHandler (handle.first))
+        {
+            // frameOffset is relative to the current (sub-)block; add the
+            // sub-block's start so handlers see the offset within the host block.
+            performer.iterateOutputEvents (handle.first,
+                                           [realtimeHandler, chunkStart = currentChunkStartInBlock]
+                                           (EndpointHandle, uint32_t, uint32_t frameOffset,
+                                            const void* valueData, uint32_t valueDataSize) -> bool
+            {
+                (*realtimeHandler) (chunkStart + frameOffset, valueData, valueDataSize);
+                return true;
+            });
+
+            continue;
+        }
+
+        if (! outputEventsReadyHandler)
+            continue;
+
+        performer.iterateOutputEvents (handle.first,
+                                       [this, &anyEvents] (EndpointHandle h, uint32_t dataTypeIndex, uint32_t frameOffset,
+                                                           const void* valueData, uint32_t valueDataSize) -> bool
+        {
+            auto frame = numFramesProcessed + frameOffset;
+            auto totalSize = static_cast<uint32_t> (sizeof (h) + sizeof (dataTypeIndex) + sizeof (frame) + valueDataSize);
+
+            bool ok = outputQueue.push (totalSize, [=] (void* dest)
+            {
+                auto d = static_cast<uint8_t*> (dest);
+                choc::memory::writeNativeEndian (d, h);
+                d += sizeof (h);
+                choc::memory::writeNativeEndian (d, dataTypeIndex);
+                d += sizeof (dataTypeIndex);
+                choc::memory::writeNativeEndian (d, frame);
+                d += sizeof (frame);
+                std::memcpy (d, valueData, valueDataSize);
+            });
+
+            anyEvents = true;
+            return ok;
+        });
+    }
+
+    if (anyEvents && outputEventsReadyHandler)
+        outputEventsReadyHandler();
 }
 
 inline bool AudioMIDIPerformer::isStuckInInfiniteLoop (uint32_t thresholdMilliseconds)
