@@ -21,6 +21,8 @@
 #include "../../include/cmaj_ErrorHandling.h"
 #include "../../../../include/cmajor/COM/cmaj_EngineFactoryInterface.h"
 #include <iostream>
+#include <cstring>
+#include <type_traits>
 #include "../AST/cmaj_AST.h"
 #include "../codegen/cmaj_GraphGenerator.h"
 #include "../transformations/cmaj_Transformations.h"
@@ -522,6 +524,51 @@ struct PerformerBase  : public choc::com::ObjectWithAtomicRefCount<cmaj::Perform
     uint32_t getEventBufferSize() override      { return eventBufferSize; }
     uint32_t getXRuns() override                { return xruns; }
     const char* getRuntimeError() override      { return {}; }
+
+    //==============================================================================
+    // State snapshots are only possible for back-ends whose JIT instance keeps the
+    // whole processor state in one contiguous block (currently the LLVM JIT, via its
+    // `stateMemory` member). Other back-ends report a state size of 0, which the
+    // Performer API documents as "snapshots not supported".
+    template <typename T, typename = void>
+    struct JITHasStateMemory : std::false_type {};
+
+    template <typename T>
+    struct JITHasStateMemory<T, std::void_t<decltype (std::declval<T&>().stateMemory)>> : std::true_type {};
+
+    uint32_t getStateSize() override
+    {
+        if constexpr (JITHasStateMemory<JITInstance>::value)
+            return static_cast<uint32_t> (jit.stateMemory.size());
+        else
+            return 0;
+    }
+
+    void getState (void* destBuffer, uint32_t bufferSize) override
+    {
+        if constexpr (JITHasStateMemory<JITInstance>::value)
+        {
+            auto size = std::min (static_cast<size_t> (bufferSize), static_cast<size_t> (jit.stateMemory.size()));
+            std::memcpy (destBuffer, jit.stateMemory.data(), size);
+        }
+        else
+        {
+            (void) destBuffer; (void) bufferSize;
+        }
+    }
+
+    void restoreState (const void* srcBuffer, uint32_t bufferSize) override
+    {
+        if constexpr (JITHasStateMemory<JITInstance>::value)
+        {
+            if (static_cast<size_t> (bufferSize) == static_cast<size_t> (jit.stateMemory.size()))
+                std::memcpy (jit.stateMemory.data(), srcBuffer, bufferSize);
+        }
+        else
+        {
+            (void) srcBuffer; (void) bufferSize;
+        }
+    }
 
     const char* getStringForHandle (uint32_t handle, size_t& stringLength) override
     {
