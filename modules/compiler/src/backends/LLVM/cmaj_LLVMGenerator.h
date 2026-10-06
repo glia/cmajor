@@ -218,6 +218,18 @@ struct LLVMCodeGenerator
     ptr<CodeGenerator<LLVMCodeGenerator>> codeGenerator;
     bool useFastMaths = false;
 
+    /// Relaxes the target machine's floating-point model to match the fast-maths
+    /// IR flags: no NaN/Inf assumptions, no trapping, and permission for the
+    /// back-end to contract and re-associate FP operations (FMA, reciprocal
+    /// estimates). Only applied when BuildSettings::shouldUseFastMaths() is set.
+    static void applyFastMathTargetOptions (::llvm::TargetOptions& opts)
+    {
+        opts.UnsafeFPMath = true;
+        opts.NoInfsFPMath = true;
+        opts.NoNaNsFPMath = true;
+        opts.NoTrappingFPMath = true;
+    }
+
     ::llvm::DataLayout dataLayout;
     choc::value::SimpleStringDictionary& stringDictionary;
 
@@ -320,6 +332,9 @@ struct LLVMCodeGenerator
             opts.ExceptionModel = ::llvm::ExceptionHandling::None;
             opts.setFPDenormalMode (::llvm::DenormalMode::getPositiveZero());
 
+            if (useFastMaths)
+                applyFastMathTargetOptions (opts);
+
             machineBuilder->setCodeGenOptLevel (getCodeGenOptLevel (buildSettings.getOptimisationLevel()));
 
             if (auto tm = machineBuilder->createTargetMachine())
@@ -394,6 +409,13 @@ struct LLVMCodeGenerator
         ::llvm::CGSCCAnalysisManager            cGSCCAnalysisManager;
         ::llvm::ModuleAnalysisManager           moduleAnalysisManager;
         ::llvm::PipelineTuningOptions pto;
+
+        // Loop vectorisation, unrolling and interleaving are on by default in the
+        // pipeline, but superword-level (straight-line) vectorisation is not; it
+        // is what packs per-sample DSP arithmetic into SIMD lanes, so enable it
+        // alongside the other fast-maths relaxations.
+        if (useFastMaths)
+            pto.SLPVectorization = true;
 
 #if defined (__linux__) && defined (__arm__)
         // Do not use the full optimisation passes on arm32 due to compilation issues (for now)
