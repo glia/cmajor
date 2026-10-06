@@ -297,6 +297,180 @@ static constexpr const char* passThroughPatchSource = R"(
 )";
 
 //==============================================================================
+//==============================================================================
+/// Tests for the seamless renderer hot-swap in Patch::setNewRenderer: a rebuild
+/// while a renderer is live must not stop and restart playback, must keep audio
+/// flowing, must tell the views, and a failed rebuild must leave the old
+/// renderer playing.
+static void runHotSwapTests (choc::test::TestProgress& progress)
+{
+    CHOC_CATEGORY (PatchUtilities);
+
+    {
+        CHOC_TEST (RebuildWhilePlayingDoesNotStopPlayback)
+
+        Patch patch;
+        int stops = 0, starts = 0;
+        initTestPatch (patch);
+        patch.stopPlayback  = [&] { ++stops; };
+        patch.startPlayback = [&] { ++starts; };
+
+        if (! loadTestPatch (patch, createBasicManifest(), gainPatchSource, 4, 4, 1, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        // the first load is a cold start: the host is asked to (re)start playback once
+        CHOC_EXPECT_EQ (starts, 1);
+        CHOC_EXPECT_TRUE (stops <= 1);
+        auto stopsAfterLoad = stops;
+
+        std::array<float, 4> buffer { 1.0f, 1.0f, 1.0f, 1.0f };
+        std::array<float*, 1> buffers { { buffer.data() } };
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_NEAR (buffer[0], 1.0f, 0.0001f);
+
+        patch.rebuild (true);
+
+        CHOC_EXPECT_TRUE (patch.isPlayable());
+        // ...but a rebuild of a live patch is a hot swap: no stop, no restart
+        CHOC_EXPECT_EQ (starts, 1);
+        CHOC_EXPECT_EQ (stops, stopsAfterLoad);
+
+        // and the new renderer is immediately rendering
+        buffer.fill (1.0f);
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_NEAR (buffer[3], 1.0f, 0.0001f);
+    }
+
+    {
+        CHOC_TEST (HotSwapCarriesParameterValuesAndKeepsRendering)
+
+        Patch patch;
+
+        if (! initAndLoadTestPatch (patch, gainPatchSource, 4, 4, 1, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        auto gain = patch.findParameter (EndpointID::create (std::string_view ("gain")));
+
+        if (! gain)
+        {
+            CHOC_FAIL ("Expected to find parameter");
+            return;
+        }
+
+        CHOC_EXPECT_TRUE (gain->setValue (0.5f, true, -1, 0));
+
+        std::array<float, 4> buffer { 1.0f, 1.0f, 1.0f, 1.0f };
+        std::array<float*, 1> buffers { { buffer.data() } };
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_NEAR (buffer[3], 0.5f, 0.0001f);
+
+        patch.rebuild (true);
+        CHOC_EXPECT_TRUE (patch.isPlayable());
+
+        auto gainAfter = patch.findParameter (EndpointID::create (std::string_view ("gain")));
+
+        if (! gainAfter)
+        {
+            CHOC_FAIL ("Expected to find parameter after the rebuild");
+            return;
+        }
+
+        CHOC_EXPECT_NEAR (gainAfter->currentValue, 0.5f, 0.0001f);
+
+        buffer.fill (1.0f);
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_NEAR (buffer[3], 0.5f, 0.0001f);
+    }
+
+    {
+        CHOC_TEST (HotSwapNotifiesViews)
+
+        Patch patch;
+
+        if (! initAndLoadTestPatch (patch, gainPatchSource, 4, 4, 1, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        RecordingPatchView view (patch);
+        view.clearMessages();
+
+        patch.rebuild (true);
+        CHOC_EXPECT_TRUE (patch.isPlayable());
+
+        CHOC_EXPECT_TRUE (runMessageLoopUntil ([&] { return view.countMessagesOfType ("status") != 0; }));
+    }
+
+    {
+        CHOC_TEST (FailedRebuildKeepsOldRendererPlaying)
+
+        Patch patch;
+        int stops = 0;
+        bool reportedErrors = false;
+        initTestPatch (patch);
+        patch.stopPlayback  = [&] { ++stops; };
+        patch.statusChanged = [&] (const Patch::Status& s) { if (s.messageList.hasErrors()) reportedErrors = true; };
+
+        if (! loadTestPatch (patch, createBasicManifest(), gainPatchSource, 4, 4, 1, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        auto stopsAfterLoad = stops;
+
+        const auto brokenSource = R"(
+            processor Test [[ main ]]
+            {
+                input stream float32 in;
+                output stream float32 out;
+                void main() { loop { out <- in * thisDoesNotExist; advance(); } }
+            }
+        )";
+
+        // a synchronous load of a broken program reports failure...
+        CHOC_EXPECT_FALSE (loadTestPatch (patch, createBasicManifest(), brokenSource, 4, 4, 1, 1));
+        CHOC_EXPECT_TRUE (reportedErrors);
+
+        // ...but the previous renderer is still live and was never stopped
+        CHOC_EXPECT_TRUE (patch.isPlayable());
+        CHOC_EXPECT_EQ (stops, stopsAfterLoad);
+
+        std::array<float, 4> buffer { 1.0f, 1.0f, 1.0f, 1.0f };
+        std::array<float*, 1> buffers { { buffer.data() } };
+        patch.process (buffers.data(), 4, [] (auto&&...) {});
+        CHOC_EXPECT_NEAR (buffer[3], 1.0f, 0.0001f);
+    }
+
+    {
+        CHOC_TEST (UnloadAfterHotSwapStopsPlayback)
+
+        Patch patch;
+        int stops = 0;
+        initTestPatch (patch);
+        patch.stopPlayback = [&] { ++stops; };
+
+        if (! loadTestPatch (patch, createBasicManifest(), gainPatchSource, 4, 4, 1, 1))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        patch.rebuild (true);
+        auto stopsBeforeUnload = stops;
+        patch.unload();
+        CHOC_EXPECT_FALSE (patch.isPlayable());
+        CHOC_EXPECT_TRUE (stops > stopsBeforeUnload);
+    }
+}
+
 static void runPatchStateTests (choc::test::TestProgress& progress)
 {
     CHOC_CATEGORY (PatchUtilities);
@@ -2858,6 +3032,7 @@ static bool runUnitTests (choc::test::TestProgress& progress)
     runPatchProcessingTests (progress);
     runPatchClientMessageTests (progress);
     runPatchAsyncTests (progress);
+    runHotSwapTests (progress);
 
     return progress.numFails == 0;
 }
