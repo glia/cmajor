@@ -687,6 +687,94 @@ static void runRealtimeOutputEventTapTests (choc::test::TestProgress& progress)
     }
 }
 
+//==============================================================================
+/// A processor with a stereo stream that the host hears and a mono one that only
+/// exists to be monitored, so that tests can check the listener-only path. (With
+/// two host channels the stereo stream takes both, leaving `monitor` unmapped;
+/// a single host channel would instead mix every output stream onto it.)
+static constexpr const char* monitorStreamPatchSource = R"(
+    processor Test [[ main ]]
+    {
+        output stream float32<2> out;
+        output stream float32 monitor;
+
+        void main()
+        {
+            loop
+            {
+                out <- float32<2> (0.25f, 0.25f);
+                monitor <- 1.0f;
+                advance();
+            }
+        }
+    }
+)";
+
+/// Tests for AudioDataListener::wantsProcessing(): an output stream with no host
+/// channels is only drained while something is subscribed to it, and subscribing
+/// again after a quiet spell must bring the data back.
+static void runEndpointDrainTests (choc::test::TestProgress& progress)
+{
+    CHOC_CATEGORY (PatchUtilities);
+
+    {
+        CHOC_TEST (ListenerOnlyStreamDeliversDataOnlyWhileSubscribed)
+
+        Patch patch;
+
+        // two host output channels: the stereo `out` takes both, `monitor` has no channels and is listener-only
+        if (! initAndLoadTestPatch (patch, monitorStreamPatchSource, 64, 48000, 0, 2))
+        {
+            CHOC_FAIL ("Failed to load patch");
+            return;
+        }
+
+        RecordingPatchView view (patch);
+        auto monitor = EndpointID::create (std::string_view ("monitor"));
+
+        std::array<std::array<float, 64>, 2> backing {};
+        std::array<float*, 2> buffers { { backing[0].data(), backing[1].data() } };
+
+        const auto render = [&]
+        {
+            for (auto& b : backing)
+                b.fill (0.0f);
+
+            patch.process (buffers.data(), 64, [] (auto&&...) {});
+        };
+
+        // nothing subscribed: the host channels still render, nothing reaches the view
+        render();
+        CHOC_EXPECT_NEAR (backing[0][63], 0.25f, 0.0001f);
+        CHOC_EXPECT_NEAR (backing[1][63], 0.25f, 0.0001f);
+        runMessageLoopUntil ([] { return false; }, 100);
+        CHOC_EXPECT_EQ (view.countMessagesOfType ("levels"), 0u);
+
+        // subscribe: the monitor stream is drained and its levels arrive
+        CHOC_EXPECT_TRUE (patch.startEndpointData (view, monitor, "levels", 64, false));
+        render();
+        CHOC_EXPECT_TRUE (runMessageLoopUntil ([&] { return view.countMessagesOfType ("levels") != 0; }));
+        auto levels = view.findLastMessageOfType ("levels");
+        CHOC_EXPECT_TRUE (levels.isObject());
+        CHOC_EXPECT_NEAR (levels["max"][0].getWithDefault<float> (0), 1.0f, 0.0001f);
+
+        // unsubscribe: no more data
+        CHOC_EXPECT_TRUE (patch.stopEndpointData (view, monitor, "levels"));
+        view.clearMessages();
+        render();
+        render();
+        runMessageLoopUntil ([] { return false; }, 150);
+        CHOC_EXPECT_EQ (view.countMessagesOfType ("levels"), 0u);
+        CHOC_EXPECT_NEAR (backing[0][63], 0.25f, 0.0001f);
+
+        // subscribe again: skipping the drain while unwatched must not be sticky
+        CHOC_EXPECT_TRUE (patch.startEndpointData (view, monitor, "levels", 64, false));
+        render();
+        CHOC_EXPECT_TRUE (runMessageLoopUntil ([&] { return view.countMessagesOfType ("levels") != 0; }));
+        CHOC_EXPECT_NEAR (view.findLastMessageOfType ("levels")["max"][0].getWithDefault<float> (0), 1.0f, 0.0001f);
+    }
+}
+
 static void runPatchStateTests (choc::test::TestProgress& progress)
 {
     CHOC_CATEGORY (PatchUtilities);
@@ -3248,6 +3336,7 @@ static bool runUnitTests (choc::test::TestProgress& progress)
     runPatchProcessingTests (progress);
     runPatchClientMessageTests (progress);
     runPatchAsyncTests (progress);
+    runEndpointDrainTests (progress);
     runRealtimeOutputEventTapTests (progress);
     runHotSwapTests (progress);
 
