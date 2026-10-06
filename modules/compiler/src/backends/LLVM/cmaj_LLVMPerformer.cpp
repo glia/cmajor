@@ -196,6 +196,17 @@ struct LLJITHolder
             opts.setFPDenormalMode (::llvm::DenormalMode::getPositiveZero());
             opts.setFP32DenormalMode (::llvm::DenormalMode::getPositiveZero());
 
+            // Mirror the IR-level fast-maths flags (BuildSettings::shouldUseFastMaths,
+            // i.e. optimisation level 4 and above) in the target machine, so the
+            // back-end may contract and re-associate FP operations when lowering.
+            if (optimisationLevel >= 4)
+            {
+                opts.UnsafeFPMath = true;
+                opts.NoInfsFPMath = true;
+                opts.NoNaNsFPMath = true;
+                opts.NoTrappingFPMath = true;
+            }
+
             machineBuilder->setCodeGenOptLevel (getCodeGenOptLevel (optimisationLevel));
 
             ::llvm::orc::LLJITBuilder builder;
