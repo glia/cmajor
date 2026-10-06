@@ -239,6 +239,17 @@ struct Patch
     /// build failures, etc.
     std::function<void(const Status&)> statusChanged;
 
+    /// Optional diagnostics hook. When set, the Patch reports milestones such as
+    /// a build finishing, a renderer being swapped in or out, and an unload, as
+    /// short human-readable lines. Nothing is reported when it is empty, and the
+    /// cost of an unset handler is one branch per milestone. Intended for hosts
+    /// debugging hangs or stuck UIs; the messages are not a stable API.
+    std::function<void(std::string_view)> debugMessageHandler;
+
+    /// Passes a message to debugMessageHandler if one is set (public so that views
+    /// and other helpers that belong to the patch can report through the same hook).
+    void logDebugMessage (std::string_view) const;
+
     /// This object can optionally be provided if you have a build cache that you'd like
     /// the engine to use when compiling code.
     cmaj::CacheDatabaseInterface::Ptr cache;
@@ -1968,7 +1979,10 @@ private:
         }
 
         if (finishedTask && finishedTask->build)
+        {
+            owner.logDebugMessage ("build thread: background build finished, installing renderer");
             owner.setNewRenderer (finishedTask->build->takeRenderer());
+        }
     }
 
     void clearTaskList()
@@ -2108,6 +2122,7 @@ inline Engine::CodeGenOutput Patch::generateCode (const LoadParams& params, cons
 
 inline void Patch::unload()
 {
+    logDebugMessage ("unload");
     buildThread.reset();
     clientEventQueue->stop();
 
@@ -2143,6 +2158,12 @@ inline void Patch::startCheckingForChanges()
     if (scanFilesForChanges && lastLoadParams.manifest.needsToBuildSource)
         if (lastLoadParams.manifest.getFileModificationTime != nullptr)
             fileChangeChecker = std::make_unique<PatchFileChangeChecker> (lastLoadParams.manifest, [this] (auto c) { handleFileChange (c); });
+}
+
+inline void Patch::logDebugMessage (std::string_view message) const
+{
+    if (debugMessageHandler)
+        debugMessageHandler (message);
 }
 
 inline void Patch::setStatus (std::string message)
@@ -2616,6 +2637,13 @@ inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
     if (renderer == nullptr && newRenderer == nullptr)
         return;
 
+    if (debugMessageHandler)
+        logDebugMessage (std::string ("setNewRenderer: ")
+                           + (newRenderer == nullptr ? "removing renderer"
+                               : newRenderer->errors.hasErrors() ? "new build has errors"
+                               : newRenderer->isPlayable() ? "new build is playable" : "new build is not playable")
+                           + (renderer != nullptr ? ", a renderer is currently live" : ", no renderer is live"));
+
     if (currentPlaybackParams != newRenderer->configuredPlaybackParams)
         return;
 
@@ -2658,6 +2686,7 @@ inline void Patch::setNewRenderer (std::shared_ptr<PatchRenderer> newRenderer)
     }
 
     startCheckingForChanges();
+    logDebugMessage (renderer != nullptr ? "setNewRenderer: done, renderer installed" : "setNewRenderer: done, no renderer");
 }
 
 inline void Patch::addActiveView (PatchView& v)
