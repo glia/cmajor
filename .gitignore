@@ -1,3 +1,6 @@
 .DS_Store
 build
 .claude
+# The pre-CPM LLVM checkout (dependencies.cmake now fetches it via CPM; a local
+# copy is still useful as CPM_llvm_SOURCE on developer machines).
+/3rdParty/llvm/
